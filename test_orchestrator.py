@@ -91,7 +91,9 @@ class RoutingTests(unittest.IsolatedAsyncioTestCase):
                 },
             })
 
-        self.assertEqual(socket.sent[-1]["payload"]["status"], "searching")
+        self.assertEqual(socket.sent[-1]["payload"], {
+            "status": "searching", "queue_size": 1, "bot_fallback_seconds": 7,
+        })
 
     async def test_fallback_tier_creates_rated_pair(self):
         app, socket = Orchestrator("http://unused", "secret", 0), FakeWebSocket()

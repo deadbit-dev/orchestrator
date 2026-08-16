@@ -379,6 +379,7 @@ class Orchestrator:
             await self.send(websocket, envelope("matchmaking_status", request_id, {
                 "status": "searching",
                 "queue_size": size,
+                "bot_fallback_seconds": self.fallback_seconds,
             }))
             return await self.try_pairs()
         if kind == "cancel_matchmaking":
