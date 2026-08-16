@@ -1,0 +1,54 @@
+name: scrabble-orchestrator
+
+services:
+  orchestrator:
+    image: ghcr.io/deadbit-dev/orchestrator:${ORCHESTRATOR_IMAGE_TAG:-latest}
+    build: .
+    restart: unless-stopped
+    environment:
+      DB_SERVICE_URL: ${DB_SERVICE_URL:-http://db:8080}
+      DB_SERVICE_TOKEN: ${DB_SERVICE_TOKEN:?Set DB_SERVICE_TOKEN}
+      ORCHESTRATOR_HOST: 0.0.0.0
+      ORCHESTRATOR_PORT: 9000
+      ORCHESTRATOR_API_PORT: 9001
+      ORCHESTRATOR_SERVER_TOKEN: ${ORCHESTRATOR_SERVER_TOKEN:?Set ORCHESTRATOR_SERVER_TOKEN}
+      ORCHESTRATOR_MODES: ${ORCHESTRATOR_MODES:-ranked}
+      FALLBACK_SECONDS: ${FALLBACK_SECONDS:-10}
+    ports:
+      - "127.0.0.1:${ORCHESTRATOR_PORT:-9000}:9000"
+      - "127.0.0.1:${ORCHESTRATOR_API_PORT:-9001}:9001"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "from websockets.sync.client import connect; ws=connect('ws://127.0.0.1:9000', open_timeout=2); ws.close()"]
+      interval: 30s
+      start_interval: 3s
+      start_period: 10s
+      timeout: 3s
+      retries: 5
+    networks: [backend]
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      PUBLIC_HOST: ${PUBLIC_HOST:?Set PUBLIC_HOST}
+      ORCHESTRATOR_UPSTREAM: orchestrator:9000
+      ORCHESTRATOR_API_UPSTREAM: orchestrator:9001
+      MATCH_SERVER_UPSTREAM: ${MATCH_SERVER_UPSTREAM:-match-server:9101}
+      MATCH_LANGUAGE_UPSTREAM: ${MATCH_LANGUAGE_UPSTREAM:-match-server:9102}
+    ports: ["80:80/tcp", "443:443/tcp"]
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      orchestrator: {condition: service_healthy}
+    networks: [backend]
+
+volumes:
+  caddy_data:
+  caddy_config:
+
+networks:
+  backend:
+    external: true
+    name: ${SCRABBLE_NETWORK:-scrabble}

@@ -1,0 +1,21 @@
+{$PUBLIC_HOST} {
+	@queue {
+		method GET
+		path /v1/matchmaking/queue
+	}
+	handle @queue {
+		reverse_proxy {$ORCHESTRATOR_API_UPSTREAM}
+	}
+
+	handle /languages/* {
+		reverse_proxy {$MATCH_LANGUAGE_UPSTREAM}
+	}
+
+	handle /match/* {
+		reverse_proxy {$MATCH_SERVER_UPSTREAM}
+	}
+
+	handle {
+		reverse_proxy {$ORCHESTRATOR_UPSTREAM}
+	}
+}
