@@ -136,12 +136,7 @@ class Orchestrator:
         """Make an in-flight match harmless and return the other searcher to queue."""
         async with self.lock:
             self.prune_lifecycle()
-            pending = self.pending_assignments.get(profile_id)
-            if pending:
-                client = self.clients.get(profile_id)
-                if client:
-                    await self.error(client["websocket"], request_id, "match_already_assigned", "Match assignment is awaiting server confirmation")
-                return await self.resend_assignment(profile_id)
+            self.pending_assignments.pop(profile_id, None)
             self.cancelled[profile_id] = time.monotonic() + COMMAND_TIMEOUT_SECONDS + 1
             self.state.cancel_player(profile_id)
             size = len(self.state.queue.entries)
@@ -570,7 +565,11 @@ class Orchestrator:
                 elif message["type"].startswith("server_") or message["type"] in ("create_match_result", "match_player_joined"):
                     result = await self.server_message(websocket, server_id, message)
                     if message["type"] == "server_register" and result: server_id = result
-                    if result is False: break
+                    if result is False:
+                        if message["type"] in ("create_match_result", "match_player_joined"):
+                            print(f"orchestrator: rejected {message['type']} report from server {server_id!r}")
+                        else:
+                            break
                 elif not isinstance(message.get("request_id"), str):
                     await self.error(websocket, "server-push", "invalid_envelope", "Invalid envelope")
                 else:

@@ -67,6 +67,15 @@ class FailingWebSocket(FakeWebSocket):
     async def send(self, value): raise ConnectionError("closed")
 
 
+class FakeConnection(FakeWebSocket):
+    """Feeds a fixed message list into handler()'s `async for raw in websocket`."""
+    def __init__(self, messages): super().__init__(); self._messages = messages
+
+    async def __aiter__(self):
+        for message in self._messages:
+            yield json.dumps(message)
+
+
 class RoutingTests(unittest.IsolatedAsyncioTestCase):
     async def test_queue_api_is_anonymized(self):
         app = Orchestrator("http://unused", "secret", fallback_seconds=5)
@@ -371,7 +380,7 @@ class RoutingTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(any(message["type"] == "match_assigned" for message in one.sent + two.sent))
         self.assertEqual([item["profile_id"] for item in app.state.queue], [2])
 
-    async def test_cancel_after_assignment_resends_instead_of_creating_ghost_match(self):
+    async def test_cancel_after_assignment_clears_pending_assignment_and_reports_cancelled(self):
         app = Orchestrator("http://unused", "secret")
         control, one, two = FakeWebSocket(), FakeWebSocket(), FakeWebSocket()
         app.state.register("a", "ws://a", 5).websocket = control
@@ -380,11 +389,14 @@ class RoutingTests(unittest.IsolatedAsyncioTestCase):
         app.state.routes["new"] = "a"
         await app.assign(queued(1, 1200), envelope("match_assigned", "r", {"operation": "join"}, "new"), "a", "player_1")
         await app.client_message(one, app.clients[1], {"v": VERSION, "type": "cancel_matchmaking", "request_id": "cancel", "payload": {}})
-        self.assertIn(1, app.pending_assignments)
+        self.assertNotIn(1, app.pending_assignments)
         self.assertEqual(app.state.queue, [])
-        self.assertEqual(one.sent[-2]["payload"]["code"], "match_already_assigned")
-        self.assertEqual(one.sent[-1]["type"], "match_assigned")
+        self.assertEqual(one.sent[-1]["payload"], {"status": "cancelled", "queue_size": 0})
+        # The match server can still legitimately ack the seat after cancellation (route/seat still match);
+        # this is the harmless-consequence case that a separate match-server-side fix (stuck WAITING match
+        # force-stop) is responsible for cleaning up. Cancel only stops the orchestrator from re-pushing it.
         self.assertTrue(await app.server_message(control, "a", {"v": VERSION, "type": "match_player_joined", "payload": {"match_id": "new", "profile_id": 1, "player_id": "player_1"}}))
+        self.assertNotIn(1, app.pending_assignments)
 
     async def test_lobby_disconnect_keeps_assignment_until_valid_match_server_ack(self):
         app, control = Orchestrator("http://unused", "secret"), FakeWebSocket()
@@ -419,6 +431,34 @@ class RoutingTests(unittest.IsolatedAsyncioTestCase):
         app.pending_assignments[1] = {"message": {"type": "match_assigned", "match_id": "new"}, "expires_at": time.monotonic() + 10, "source_match_id": None}
         await app.client_message(one, app.clients[1], {"v": VERSION, "type": "request_rematch", "request_id": "retry", "match_id": "old", "payload": {}})
         self.assertEqual(one.sent[-1]["type"], "match_assigned")
+
+    async def test_unrecognised_match_player_joined_keeps_control_link_open(self):
+        app = Orchestrator("http://unused", "secret")
+        connection = FakeConnection([
+            {"v": VERSION, "type": "server_register", "payload": {"token": "secret", "server_id": "a", "public_url": "ws://a", "max_matches": 5}},
+            # No matching entry in app.matches: this is the "orchestrator restarted" / mismatched-report case.
+            {"v": VERSION, "type": "match_player_joined", "payload": {"match_id": "unknown-match", "profile_id": 1, "player_id": "player_1"}},
+            # Proves the loop kept reading after the rejected report above: admin_status still gets answered.
+            {"v": VERSION, "type": "admin_status", "request_id": "status", "payload": {"token": "secret"}},
+        ])
+
+        await app.handler(connection)
+
+        self.assertEqual([message["type"] for message in connection.sent], ["server_registered", "admin_status"])
+
+    async def test_bad_server_heartbeat_still_closes_control_link(self):
+        app = Orchestrator("http://unused", "secret")
+        connection = FakeConnection([
+            {"v": VERSION, "type": "server_register", "payload": {"token": "secret", "server_id": "a", "public_url": "ws://a", "max_matches": 5}},
+            # Invalid match_ids (non-string element) makes state.heartbeat raise, so server_message returns False.
+            {"v": VERSION, "type": "server_heartbeat", "payload": {"match_ids": ["ok", 3], "active_matches": 2}},
+            # Should never be reached: the bad heartbeat is a genuine protocol failure and must break the loop.
+            {"v": VERSION, "type": "admin_status", "request_id": "status", "payload": {"token": "secret"}},
+        ])
+
+        await app.handler(connection)
+
+        self.assertEqual([message["type"] for message in connection.sent], ["server_registered"])
 
 
 if __name__ == "__main__":
