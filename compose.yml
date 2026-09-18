@@ -1,4 +1,4 @@
-name: scrabble-orchestrator
+name: wordness-orchestrator
 
 services:
   orchestrator:
@@ -51,4 +51,4 @@ volumes:
 networks:
   backend:
     external: true
-    name: ${SCRABBLE_NETWORK:-scrabble}
+    name: ${WORDNESS_NETWORK:-wordness}

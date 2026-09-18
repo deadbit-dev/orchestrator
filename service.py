@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Small lobby/control-plane for Scrabble match servers."""
+"""Small lobby/control-plane for Wordness match servers."""
 import argparse
 import asyncio
 import json
@@ -12,7 +12,7 @@ import uuid
 from orchestrator.queue import Queue
 from orchestrator.servers import ServerRegistry
 from orchestrator.app import serve_queue_api
-from orchestrator.scrabble_data import GenericDbClient, ScrabbleData
+from orchestrator.game_data import GenericDbClient, GameData
 
 VERSION = 6
 MAX_MESSAGE_BYTES = 32 * 1024
@@ -85,7 +85,7 @@ class State:
 class Orchestrator:
     def __init__(self, db_service_url, server_token, fallback_seconds=DEFAULT_FALLBACK_SECONDS, db_service_token=""):
         self.state, self.server_token = State(), server_token
-        self.data = ScrabbleData(GenericDbClient(db_service_url, db_service_token))
+        self.data = GameData(GenericDbClient(db_service_url, db_service_token))
         self.fallback_seconds = fallback_seconds
         self.clients, self.commands, self.matches, self.rematches = {}, {}, {}, {}
         self.pending_assignments, self.cancelled = {}, {}

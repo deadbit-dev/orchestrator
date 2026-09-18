@@ -1,6 +1,6 @@
 # orchestrator
 
-Matchmaking, match-server registry, Scrabble persistence adapter, and the public Caddy entry point.
+Matchmaking, match-server registry, Wordness persistence adapter, and the public Caddy entry point.
 
 The generic database is external and configured through `DB_SERVICE_URL`. Match servers register themselves over the orchestrator WebSocket. Caddy exposes the player WebSocket, the anonymous queue snapshot, language packs, and match WebSockets.
 
@@ -8,11 +8,11 @@ The generic database is external and configured through `DB_SERVICE_URL`. Match 
 
 ```bash
 cp .env.example .env
-docker network create scrabble 2>/dev/null || true
+docker network create wordness 2>/dev/null || true
 docker compose --env-file .env up -d --build
 ```
 
-The `db` and `match-server` containers must join `SCRABBLE_NETWORK`. The orchestrator ports are bound to localhost for administration; public traffic goes through Caddy on ports 80/443.
+The `db` and `match-server` containers must join `WORDNESS_NETWORK`. The orchestrator ports are bound to localhost for administration; public traffic goes through Caddy on ports 80/443.
 
 ## Test
 

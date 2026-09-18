@@ -1,6 +1,6 @@
 import unittest
 from unittest.mock import AsyncMock
-from orchestrator.scrabble_data import ScrabbleData
+from orchestrator.game_data import GameData
 from service import Orchestrator
 
 
@@ -38,8 +38,8 @@ class FakeGeneric:
         return {"committed": not any(result["conflict"] for result in results), "results": results}
 
 
-class ScrabbleDataTests(unittest.IsolatedAsyncioTestCase):
-    async def asyncSetUp(self): self.generic = FakeGeneric(); self.data = ScrabbleData(self.generic)
+class GameDataTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self): self.generic = FakeGeneric(); self.data = GameData(self.generic)
 
     async def test_profile_state_and_idempotency(self):
         profile = await self.data.resolve_profile(None)

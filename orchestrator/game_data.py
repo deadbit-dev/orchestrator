@@ -1,4 +1,4 @@
-"""Scrabble rules over the generic schema-driven database service."""
+"""Word game rules over the generic schema-driven database service."""
 import asyncio
 import hashlib
 import json
@@ -84,7 +84,7 @@ class GenericDbClient:
         return await asyncio.to_thread(send)
 
 
-class ScrabbleData:
+class GameData:
     def __init__(self, client):
         self.client = client
         # ponytail: global lock, DB/native transaction or per-profile locks if replicas/throughput matter.
