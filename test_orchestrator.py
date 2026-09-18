@@ -33,6 +33,38 @@ class StateTests(unittest.TestCase):
         state.queue_player(queued(3, 2000, 3))
         self.assertEqual([(a["profile_id"], b["profile_id"]) for a, b in state.pairs(10, 5)], [(3, 90)])
 
+    def test_estimate_waits_for_a_queued_opponent_rating_gap(self):
+        state = State()
+        state.queue_player(queued(1, 1200, 0, fallback_seconds=60)); state.queue_player(queued(2, 1340, 4, fallback_seconds=60))
+        # 140 points need the 150 gap, which the older ticket reaches at 15s: the newer one waits 11s
+        self.assertEqual(state.queue.estimate(state.queue.entries[1], 5), 11)
+        state.queue_player(queued(3, 1250, 5, fallback_seconds=60))
+        self.assertEqual(state.queue.estimate(state.queue.entries[2], 5), 0)
+
+    def test_estimate_uses_live_bot_pool_and_forgets_a_missing_bot(self):
+        state = State()
+        state.queue_player(queued(1, 1200, 0, fallback_seconds=10))
+        ticket = state.queue.entries[0]
+        self.assertIsNone(state.queue.estimate(ticket, 1))
+        state.queue.stats.note_bot_poll(0); state.queue.stats.note_bot_poll(2)
+        self.assertEqual(state.queue.estimate(ticket, 3), 10 + 2 + 2)
+        self.assertIsNone(state.queue.estimate(ticket, 2 + 15.5))
+
+    def test_estimate_learns_human_waits_and_bot_delays(self):
+        state = State()
+        state.queue_player(queued(1, 1200, 0, fallback_seconds=60)); state.queue_player(queued(2, 1200, 20, fallback_seconds=60))
+        state.pairs(20, 60)
+        state.queue_player(queued(3, 1200, 100, fallback_seconds=60))
+        self.assertEqual(state.queue.estimate(state.queue.entries[0], 101), 10)
+        self.assertIsNone(state.queue.estimate(state.queue.entries[0], 111))
+        state.queue.stats.note_bot_poll(160)
+        state.queue_player({**queued(90, 1200, 161), "queue_tier": "fallback"})
+        state.pairs(165, 60)
+        state.queue_player(queued(4, 1200, 200, fallback_seconds=60))
+        state.queue.stats.note_bot_poll(211)
+        # past the 10s human median, only the bot's learned 5s delay predicts the wait
+        self.assertEqual(state.queue.estimate(state.queue.entries[0], 211), 60 + 5)
+
     def test_least_loaded_reservation_and_capacity(self):
         state = State(); state.register("a", "ws://a", 2); state.register("b", "ws://b", 2)
         state.servers["a"].websocket = state.servers["b"].websocket = object()
@@ -87,7 +119,7 @@ class RoutingTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(body["entries"][0]["fallback_eligible"])
         self.assertEqual((await app.api_response("POST", "/v1/matchmaking/queue", {}))[0], "404 Not Found")
 
-    async def test_matchmaking_status_reports_searching(self):
+    async def test_matchmaking_status_has_no_estimate_without_bots_or_history(self):
         app, socket = Orchestrator("http://unused", "secret", fallback_seconds=7), FakeWebSocket()
         client = {"profile_id": 1, "rating": 1200, "websocket": socket}
         app.clients[1] = client
@@ -101,8 +133,25 @@ class RoutingTests(unittest.IsolatedAsyncioTestCase):
             })
 
         self.assertEqual(socket.sent[-1]["payload"], {
-            "status": "searching", "queue_size": 1, "bot_fallback_seconds": 7,
+            "status": "searching", "queue_size": 1, "wait_seconds": 0.0, "estimated_wait_seconds": None,
         })
+
+    async def test_estimate_is_pushed_when_bot_pool_appears(self):
+        app, socket = Orchestrator("http://unused", "secret", fallback_seconds=7), FakeWebSocket()
+        app.clients[1] = {"profile_id": 1, "rating": 1200, "websocket": socket}
+        app.state.queue_player({**queued(1, 1200, 100), "queue_tier": "regular", "fallback_seconds": 7, "reported_estimate": None})
+
+        with patch("service.time.time", return_value=102):
+            await app.publish_estimates()
+            self.assertEqual(socket.sent, [])
+            await app.api_response("GET", "/v1/matchmaking/queue", {})
+            await app.publish_estimates()
+            await app.publish_estimates()
+
+        self.assertEqual(len(socket.sent), 1)
+        self.assertEqual(socket.sent[0]["request_id"], "r")
+        self.assertEqual(socket.sent[0]["payload"]["wait_seconds"], 2.0)
+        self.assertEqual(socket.sent[0]["payload"]["estimated_wait_seconds"], 9)
 
     async def test_fallback_tier_creates_rated_pair(self):
         app, socket = Orchestrator("http://unused", "secret", 0), FakeWebSocket()

@@ -41,3 +41,32 @@ def pairs(entries, now, fallback_seconds):
         else:
             result.append((regular.pop(index), fallback.pop(candidate)))
     return result, sorted(regular + fallback, key=lambda item: item["queued_at"])
+
+
+def _rating_wait(difference):
+    """Wait, in seconds, after which rating_gap() admits this rating difference."""
+    if difference <= 100:
+        return 0.0
+    if difference > 400:
+        return None
+    return 15.0 * -(-(difference - 100) // 50)
+
+
+def pair_eta(ticket, entries, now, fallback_seconds):
+    """Seconds until `ticket` pairs with a compatible ticket already queued, or None."""
+    wait = now - ticket["queued_at"]
+    best = None
+    for other in entries:
+        if other is ticket or other["profile_id"] == ticket["profile_id"] or not _same(ticket, other):
+            continue
+        if other["queue_tier"] == "fallback":
+            eta = fallback_seconds - wait
+        else:
+            longest = max(wait, now - other["queued_at"])
+            eta = fallback_seconds - longest
+            rating_wait = _rating_wait(abs(ticket["rating"] - other["rating"]))
+            if rating_wait is not None:
+                eta = min(eta, rating_wait - longest)
+        eta = max(0.0, eta)
+        best = eta if best is None else min(best, eta)
+    return best

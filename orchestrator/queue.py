@@ -2,6 +2,7 @@
 import time
 import secrets
 from .modes import enabled
+from .wait_stats import WaitStats
 
 
 class Queue:
@@ -9,6 +10,7 @@ class Queue:
         self.entries = []
         self.revision = 0
         self.modes = enabled() if modes is None else modes
+        self.stats = WaitStats()
 
     def queue_player(self, item):
         item.setdefault("queue_tier", "regular")
@@ -43,11 +45,21 @@ class Queue:
             matching = [entry for entry in self.entries if entry["mode"] == mode]
             other = [entry for entry in self.entries if entry["mode"] != mode]
             pairs, matching = module.pairs(matching, now, fallback_seconds)
+            for first, second in pairs:
+                self.stats.record_pair(first, second, now)
             selected.extend(pairs); self.entries = other + matching
         self.entries.sort(key=lambda item: item["queued_at"])
         if selected:
             self.revision += 1
         return selected
+
+    def estimate(self, item, now=None):
+        """Expected total wait of a queued regular ticket, in seconds, or None if unknown."""
+        now = time.time() if now is None else now
+        module = self.modes.get(item["mode"])
+        same_mode = [entry for entry in self.entries if entry["mode"] == item["mode"]]
+        pair_eta = module.pair_eta(item, same_mode, now, item["fallback_seconds"]) if module else None
+        return self.stats.estimate(item, pair_eta, now)
 
     def snapshot(self, now=None):
         now = time.time() if now is None else now

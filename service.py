@@ -97,6 +97,7 @@ class Orchestrator:
         self.cancelled = {profile_id: expires_at for profile_id, expires_at in self.cancelled.items() if expires_at > now}
 
     def requeue_player(self, player):
+        player.pop("reported_estimate", None)
         self.state.queue_player(player)
 
     async def assign(self, player, message, server_id, player_id):
@@ -159,7 +160,9 @@ class Orchestrator:
     async def api_response(self, method, path, headers, body=b""):
         if method == "GET" and path == "/v1/matchmaking/queue":
             async with self.lock:
-                return "200 OK", self.state.queue.snapshot()
+                now = time.time()
+                self.state.queue.stats.note_bot_poll(now)
+                return "200 OK", self.state.queue.snapshot(now)
         if method != "POST" or path not in ("/profiles/resolve", "/matches/complete", "/matches/history", "/matches/detail", "/matches/state/save", "/matches/state/load", "/matches/state/delete"):
             return "404 Not Found", {}
         authorization = next((value.strip() for key, value in headers.items() if key.lower() == "authorization"), "")
@@ -297,10 +300,10 @@ class Orchestrator:
                 for player in active:
                     client = self.clients.get(player["profile_id"])
                     if client:
-                        await self.send(client["websocket"], envelope("matchmaking_status", player["request_id"], {
-                            "status": "searching" if requeue else "cancelled",
-                            "queue_size": len(self.state.queue.entries),
-                        }))
+                        status = self.searching_status(player, time.time()) if requeue else {
+                            "status": "cancelled", "queue_size": len(self.state.queue.entries),
+                        }
+                        await self.send(client["websocket"], envelope("matchmaking_status", player["request_id"], status))
                 return False
             if result.get("ok") is not True:
                 if result.get("code") == "capacity_exceeded":
@@ -334,10 +337,37 @@ class Orchestrator:
         for first, second in pairs:
             await self.create_match(first, second, True, True)
 
+    def searching_status(self, item, now):
+        """Build a regular ticket's status and remember the estimate it carries."""
+        estimate = self.state.queue.estimate(item, now)
+        item["reported_estimate"] = None if estimate is None else round(estimate)
+        return {
+            "status": "searching",
+            "queue_size": len(self.state.queue.entries),
+            "wait_seconds": round(max(0.0, now - item["queued_at"]), 1),
+            "estimated_wait_seconds": item["reported_estimate"],
+        }
+
+    async def publish_estimates(self):
+        """Push a fresh status to every searcher whose expected wait has changed."""
+        updates = []
+        async with self.lock:
+            now = time.time()
+            for item in self.state.queue.entries:
+                if item["queue_tier"] != "regular" or item["profile_id"] not in self.clients:
+                    continue
+                estimate = self.state.queue.estimate(item, now)
+                if (None if estimate is None else round(estimate)) != item.get("reported_estimate", False):
+                    updates.append((self.clients[item["profile_id"]], item["request_id"], self.searching_status(item, now)))
+        for client, request_id, payload in updates:
+            try: await self.send(client["websocket"], envelope("matchmaking_status", request_id, payload))
+            except Exception: pass
+
     async def matchmaking_loop(self):
         while True:
             await asyncio.sleep(1)
             await self.try_pairs()
+            await self.publish_estimates()
 
     async def client_message(self, websocket, client, message):
         request_id, kind, payload = message["request_id"], message["type"], message["payload"]
@@ -370,12 +400,8 @@ class Orchestrator:
             async with self.lock:
                 self.prune_lifecycle(); self.cancelled.pop(profile_id, None)
                 self.state.queue_player(item)
-                size = len(self.state.queue.entries)
-            await self.send(websocket, envelope("matchmaking_status", request_id, {
-                "status": "searching",
-                "queue_size": size,
-                "bot_fallback_seconds": self.fallback_seconds,
-            }))
+                status = self.searching_status(item, item["queued_at"])
+            await self.send(websocket, envelope("matchmaking_status", request_id, status))
             return await self.try_pairs()
         if kind == "cancel_matchmaking":
             return await self.cancel_pair(profile_id, request_id)
