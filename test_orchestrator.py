@@ -509,6 +509,23 @@ class RoutingTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual([message["type"] for message in connection.sent], ["server_registered"])
 
+    async def test_abrupt_disconnect_is_not_an_error_and_cleans_up(self):
+        from service import ConnectionClosed
+
+        class DroppedConnection(FakeConnection):
+            async def __aiter__(self):
+                async for raw in super().__aiter__(): yield raw
+                raise ConnectionClosed("no close frame received or sent")
+
+        app = Orchestrator("http://unused", "secret")
+        connection = DroppedConnection([
+            {"v": VERSION, "type": "server_register", "payload": {"token": "secret", "server_id": "a", "public_url": "ws://a", "max_matches": 5}},
+        ])
+
+        await app.handler(connection)
+
+        self.assertIsNone(app.state.servers["a"].websocket)
+
 
 if __name__ == "__main__":
     unittest.main()

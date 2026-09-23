@@ -14,6 +14,11 @@ from orchestrator.servers import ServerRegistry
 from orchestrator.app import serve_queue_api
 from orchestrator.game_data import GenericDbClient, GameData
 
+try:
+    from websockets.exceptions import ConnectionClosed
+except ImportError:  # tests run without websockets installed
+    ConnectionClosed = ConnectionError
+
 VERSION = 6
 MAX_MESSAGE_BYTES = 32 * 1024
 MAX_TEXT = 128
@@ -600,6 +605,8 @@ class Orchestrator:
                     await self.error(websocket, "server-push", "invalid_envelope", "Invalid envelope")
                 else:
                     await self.client_message(websocket, client, message)
+        except ConnectionClosed:
+            pass  # peer dropped without a close frame (killed client, network loss); cleanup below handles it
         finally:
             await self.disconnect_client(client)
             if server_id and self.state.servers.get(server_id, None) and self.state.servers[server_id].websocket is websocket: self.state.servers[server_id].websocket = None
